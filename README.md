@@ -1,4 +1,4 @@
-# CrossPoint Reader
+# CrossPoint Reader CJK UI
 
 > **🌏 CJK Support Fork** — This fork adds size-matched Chinese, Japanese, and Korean (CJK) UI text support alongside book content. See [Reading CJK content](#reading-cjk-content) below for setup. For the official CrossPoint project, visit [crosspoint-reader/crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader).
 
