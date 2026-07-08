@@ -1,8 +1,42 @@
 # CrossPoint Reader CJK UI
 
 > **🌏 CJK Support Fork** — This fork adds size-matched Chinese, Japanese, and Korean (CJK) UI text support alongside book content. See [Reading CJK content](#reading-cjk-content) below for setup. For the official CrossPoint project, visit [crosspoint-reader/crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader).
+>
+> ### Reading CJK content (Chinese, Japanese, Korean)
 
-[![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
+Two paths are available — pick the one that suits your workflow:
+
+#### Path 1: Content-only (minimal setup)
+**What you get:** CJK characters render correctly *inside book text*.  
+**What you don't get:** CJK book titles, file names, and UI strings still show replacement boxes.
+
+**Setup:** Convert any CJK-capable font (or import a pre-built one) with reader sizes (12/14/16/18pt), then select it from the font menu. CJK book content immediately renders in that font. Works on **CrossPoint 1.4.1 (official)** and any other CrossPoint build — no firmware update needed.
+
+**Best for:** Readers who want CJK content to work out of the box with zero extra steps beyond font selection.
+
+#### Path 2: Full CJK UI support (this fork)
+**What you get:** CJK renders everywhere — book text *and* titles, file names, headers, list rows, all at the correct size.
+
+**What you need:** This firmware build + a CJK SD font converted with **UI sizes included** (8, 10, 12, 14, 16, 18pt — the extra 8/10/12 sizes are just for the interface).
+
+**Setup:**
+1. Flash this firmware build to your device.
+2. Convert a CJK font with UI sizes included:
+   ```bash
+   python3 lib/EpdFont/scripts/fontconvert_sdcard.py \
+     MyCJKFont.otf \
+     --intervals cjk \
+     --sizes 8,10,12,14,16,18 \
+     --style regular \
+     --name MyCJKFont \
+     --output-dir ./MyCJKFont/
+   ```
+3. Import the `.cpfont` files to your SD card as usual.
+4. Select the font from the menu.
+
+**Best for:** Readers who want a polished CJK experience where every text element in the UI is rendered in the same font at the right size.
+
+---
 
 CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.
 
@@ -129,39 +163,6 @@ Convert your own TTF/OTF files into `.cpfont` files that load from the SD card. 
 
 Conversion runs the firmware repo's `lib/EpdFont/scripts/fontconvert_sdcard.py` script unmodified, so output matches a local host build.
 
-### Reading CJK content (Chinese, Japanese, Korean)
-
-Two paths are available — pick the one that suits your workflow:
-
-#### Path 1: Content-only (minimal setup)
-**What you get:** CJK characters render correctly *inside book text*.  
-**What you don't get:** CJK book titles, file names, and UI strings still show replacement boxes.
-
-**Setup:** Convert any CJK-capable font (or import a pre-built one) with reader sizes (12/14/16/18pt), then select it from the font menu. CJK book content immediately renders in that font. Works on **CrossPoint 1.4.1 (official)** and any other CrossPoint build — no firmware update needed.
-
-**Best for:** Readers who want CJK content to work out of the box with zero extra steps beyond font selection.
-
-#### Path 2: Full CJK UI support (this fork)
-**What you get:** CJK renders everywhere — book text *and* titles, file names, headers, list rows, all at the correct size.
-
-**What you need:** This firmware build + a CJK SD font converted with **UI sizes included** (8, 10, 12, 14, 16, 18pt — the extra 8/10/12 sizes are just for the interface).
-
-**Setup:**
-1. Flash this firmware build to your device.
-2. Convert a CJK font with UI sizes included:
-   ```bash
-   python3 lib/EpdFont/scripts/fontconvert_sdcard.py \
-     MyCJKFont.otf \
-     --intervals cjk \
-     --sizes 8,10,12,14,16,18 \
-     --style regular \
-     --name MyCJKFont \
-     --output-dir ./MyCJKFont/
-   ```
-3. Import the `.cpfont` files to your SD card as usual.
-4. Select the font from the menu.
-
-**Best for:** Readers who want a polished CJK experience where every text element in the UI is rendered in the same font at the right size.
 
 ---
 
