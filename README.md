@@ -3,11 +3,11 @@
 > **🌏 CJK Support Fork** — This fork adds size-matched Chinese, Japanese, and Korean (CJK) UI text support alongside book content. See [Reading CJK content](#reading-cjk-content) below for setup. For the official CrossPoint project, visit [crosspoint-reader/crosspoint-reader](https://github.com/crosspoint-reader/crosspoint-reader).
 >
 > 
-### Reading CJK content (Chinese, Japanese, Korean)
+## Reading CJK content (Chinese, Japanese, Korean)
 
 Two paths are available — pick the one that suits your workflow:
 
-#### Path 1: Content-only (minimal setup)
+### Path 1: Content-only (minimal setup)
 **What you get:** CJK characters render correctly *inside book text*.  
 **What you don't get:** CJK book titles, file names, and UI strings still show replacement boxes.
 
@@ -17,7 +17,7 @@ You can get a prebuild font from the release [NotoSansMonoCJK.zip](https://githu
 
 **Best for:** Readers who want CJK content to work out of the box with zero extra steps beyond font selection.
 
-#### Path 2: Full CJK UI support (this fork)
+### Path 2: Full CJK UI support (this fork)
 **What you get:** CJK renders everywhere — book text *and* titles, file names, headers, list rows, all at the correct size.
 
 **What you need:** This firmware build + a CJK SD font converted with **UI sizes included** (8, 10, 12, 14, 16, 18pt — the extra 8/10/12 sizes are just for the interface).
