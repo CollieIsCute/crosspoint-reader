@@ -13,6 +13,8 @@ Two paths are available — pick the one that suits your workflow:
 
 **Setup:** Convert any CJK-capable font (or import a pre-built one) with reader sizes (12/14/16/18pt), then select it from the font menu. CJK book content immediately renders in that font. Works on **CrossPoint 1.4.1 (official)** and any other CrossPoint build — no firmware update needed.
 
+You can get a prebuild font from the (release)[https://github.com/szetszho/crosspoint-reader/releases/tag/1.4.1-cjk], NotoSansMonoCJK.zip, created from (NotoSansMonoCJKhk-Regular)[https://github.com/notofonts/noto-cjk/tree/main/Sans#downloading-noto-sans-cjk] (Language-specific OTFs > Traditional Chinese — Hong Kong (繁體中文—香港) | Mono Regular + Mono Bold)
+
 **Best for:** Readers who want CJK content to work out of the box with zero extra steps beyond font selection.
 
 #### Path 2: Full CJK UI support (this fork)
@@ -21,7 +23,7 @@ Two paths are available — pick the one that suits your workflow:
 **What you need:** This firmware build + a CJK SD font converted with **UI sizes included** (8, 10, 12, 14, 16, 18pt — the extra 8/10/12 sizes are just for the interface).
 
 **Setup:**
-1. Flash this firmware build to your device.
+1. Flash this firmware (from (release)[https://github.com/szetszho/crosspoint-reader/releases/tag/1.4.1-cjk]) build to your device.
 2. Convert a CJK font with UI sizes included:
    ```bash
    python3 lib/EpdFont/scripts/fontconvert_sdcard.py \
