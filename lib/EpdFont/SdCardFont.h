@@ -1,11 +1,13 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
 
 #include "EpdFont.h"
 #include "EpdFontData.h"
+#include "FixedLruCache.h"
 
 // On-disk binary format version for .cpfont files. Defined as a preprocessor
 // macro (rather than a constexpr) so it can be stringified into the SD-fonts
@@ -95,11 +97,14 @@ class SdCardFont {
   // Number of styles present in this font file.
   uint8_t styleCount() const { return styleCount_; }
 
-  // Returns true if the glyph pointer points into the overflow buffer.
+  // Returns true if the glyph pointer points into a non-mini cached glyph.
   bool isOverflowGlyph(const EpdGlyph* glyph) const;
 
-  // Returns the bitmap for an on-demand-loaded (overflow) glyph.
+  // Returns the bitmap for a UI-LRU or on-demand-loaded glyph.
   const uint8_t* getOverflowBitmap(const EpdGlyph* glyph) const;
+
+  // Refreshes UI LRU recency when a cached glyph is actually drawn.
+  void touchUiGlyph(const EpdGlyph* glyph) const;
 
   // Extract SdCardFont* from an opaque glyphMissCtx pointer.
   // Used by GfxRenderer::getGlyphBitmap() to recover the SdCardFont from EpdFontData::glyphMissCtx.
@@ -204,9 +209,51 @@ class SdCardFont {
 
   enum class CacheOwner : uint8_t { None, ReaderPage, Ui };
 
+  // Keep the UI cache in the same conservative range as the proven ESP32-C3
+  // external-font cache. The larger collection cap still lets one batch cover
+  // a full visible list without making the resident cache equally large.
+  static constexpr uint16_t UI_CACHE_CAPACITY = 128;
+  // Larger glyphs remain supported through the existing overflow path.
+  static constexpr uint16_t UI_GLYPH_BITMAP_BYTES = 260;
+
+  struct UiGlyphKey {
+    uint32_t codepoint = 0;
+    uint8_t style = 0;
+
+    bool operator==(const UiGlyphKey& other) const {
+      return codepoint == other.codepoint && style == other.style;
+    }
+  };
+
+  struct UiGlyphKeyHash {
+    size_t operator()(const UiGlyphKey& key) const {
+      const uint32_t mixed = key.codepoint * 2654435761u ^ (static_cast<uint32_t>(key.style) * 2246822519u);
+      return static_cast<size_t>(mixed ^ (mixed >> 16));
+    }
+  };
+
+  struct UiGlyphSlot {
+    uint16_t slot = 0;
+  };
+
+  using UiGlyphLru = FixedLruCache<UiGlyphKey, UiGlyphSlot, UI_CACHE_CAPACITY, UiGlyphKeyHash>;
+
+  // The cache is allocated only while a font is used by the UI. Its glyph
+  // arrays are stable, so EpdFont can index cached entries without invoking
+  // the miss callback for every rendered character.
+  struct UiCache {
+    UiGlyphLru lru;
+    EpdGlyph glyphs[UI_CACHE_CAPACITY] = {};
+    uint8_t bitmaps[UI_CACHE_CAPACITY][UI_GLYPH_BITMAP_BYTES] = {};
+    EpdUnicodeInterval intervals[MAX_STYLES][UI_CACHE_CAPACITY] = {};
+    bool kernDirty[MAX_STYLES] = {};
+    EpdFontData data[MAX_STYLES] = {};
+  };
+
   PerStyle styles_[MAX_STYLES] = {};
   uint8_t styleCount_ = 0;
   CacheOwner cacheOwner_ = CacheOwner::None;
+  UiCache* uiCache_ = nullptr;
 
   char filePath_[128] = {};
 
@@ -266,6 +313,16 @@ class SdCardFont {
   template <typename Iter>
   int buildAdvanceTableRange(Iter begin, Iter end, bool includeSpace, bool includeHyphen, uint8_t styleMask);
   int prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount, bool metadataOnly);
+
+  // UI glyph cache helpers. Reader prewarm continues to use prewarmStyle().
+  bool ensureUiCache();
+  void rebuildUiKern(uint8_t styleIdx);
+  void rebuildUiStyleData(uint8_t styleIdx);
+  int loadUiGlyphs(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount);
+  bool cacheUiGlyph(uint8_t styleIdx, uint32_t codepoint, const EpdGlyph& glyph, const uint8_t* bitmap,
+                   bool dirtyStyles[MAX_STYLES]);
+  bool getUiGlyphSlot(const EpdGlyph* glyph, uint16_t* outSlot) const;
+  const EpdGlyph* loadOverflowGlyph(uint8_t styleIdx, uint32_t codepoint);
 
   // Global helpers
   void freeAll();

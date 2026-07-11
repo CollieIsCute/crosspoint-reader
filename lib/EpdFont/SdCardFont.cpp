@@ -8,6 +8,7 @@
 #include <climits>
 #include <cstring>
 #include <memory>
+#include <new>
 
 #include "EpdFontFamily.h"
 
@@ -126,6 +127,8 @@ void SdCardFont::freeStyleAll(PerStyle& s) {
 
 void SdCardFont::freeAll() {
   clearOverflow();
+  delete uiCache_;
+  uiCache_ = nullptr;
   clearPersistentCache();
   for (uint8_t i = 0; i < MAX_STYLES; i++) {
     freeStyleAll(styles_[i]);
@@ -690,6 +693,255 @@ void SdCardFont::appendLigatureOutputs(uint8_t styleIdx, uint32_t* codepoints, u
   }
 }
 
+bool SdCardFont::ensureUiCache() {
+  if (uiCache_) return true;
+
+  uiCache_ = new (std::nothrow) UiCache();
+  if (!uiCache_) {
+    LOG_ERR("SDCF", "Failed to allocate UI glyph cache (%u slots, %u bytes/bitmap)", UI_CACHE_CAPACITY,
+            UI_GLYPH_BITMAP_BYTES);
+    return false;
+  }
+
+  for (uint8_t si = 0; si < MAX_STYLES; si++) {
+    if (!styles_[si].present) continue;
+    rebuildUiStyleData(si);
+  }
+  return true;
+}
+
+void SdCardFont::rebuildUiKern(uint8_t styleIdx) {
+  if (!uiCache_ || styleIdx >= MAX_STYLES || !styles_[styleIdx].present || !uiCache_->kernDirty[styleIdx]) return;
+
+  auto& s = styles_[styleIdx];
+  if (!loadStyleKernLigatureData(s)) {
+    uiCache_->kernDirty[styleIdx] = false;
+    return;
+  }
+
+  std::unique_ptr<uint32_t[]> codepoints(new (std::nothrow) uint32_t[UI_CACHE_CAPACITY]);
+  if (!codepoints) {
+    LOG_ERR("SDCF", "Failed to allocate UI kern codepoint staging for style %u", styleIdx);
+    uiCache_->kernDirty[styleIdx] = false;
+    return;
+  }
+
+  uint32_t count = 0;
+  for (uint16_t slot = 0; slot < UI_CACHE_CAPACITY; slot++) {
+    if (!uiCache_->lru.usedAt(slot)) continue;
+    const auto& key = uiCache_->lru.keyAt(slot);
+    if (key.style == styleIdx) codepoints[count++] = key.codepoint;
+  }
+  std::sort(codepoints.get(), codepoints.get() + count);
+  buildMiniKernMatrix(s, codepoints.get(), count);
+  uiCache_->kernDirty[styleIdx] = false;
+}
+
+void SdCardFont::rebuildUiStyleData(uint8_t styleIdx) {
+  if (!uiCache_ || styleIdx >= MAX_STYLES || !styles_[styleIdx].present) return;
+
+  auto& s = styles_[styleIdx];
+  auto& data = uiCache_->data[styleIdx];
+  auto* intervals = uiCache_->intervals[styleIdx];
+  uint16_t count = 0;
+
+  for (uint16_t slot = 0; slot < UI_CACHE_CAPACITY; slot++) {
+    if (!uiCache_->lru.usedAt(slot)) continue;
+    const auto& key = uiCache_->lru.keyAt(slot);
+    if (key.style != styleIdx) continue;
+    intervals[count++] = {key.codepoint, key.codepoint, slot};
+  }
+
+  std::sort(intervals, intervals + count,
+            [](const EpdUnicodeInterval& left, const EpdUnicodeInterval& right) {
+              return left.first < right.first;
+            });
+
+  memset(&data, 0, sizeof(data));
+  data.glyph = uiCache_->glyphs;
+  data.intervals = intervals;
+  data.intervalCount = count;
+  data.advanceY = s.header.advanceY;
+  data.ascender = s.header.ascender;
+  data.descender = s.header.descender;
+  data.is2Bit = s.header.is2Bit;
+  applyKernLigaturePointers(s, data);
+  data.glyphMissHandler = &SdCardFont::onGlyphMiss;
+  data.glyphMissCtx = &overflowCtx_[styleIdx];
+  s.epdFont.data = &data;
+}
+
+bool SdCardFont::cacheUiGlyph(uint8_t styleIdx, uint32_t codepoint, const EpdGlyph& glyph, const uint8_t* bitmap,
+                              bool dirtyStyles[MAX_STYLES]) {
+  if (!uiCache_ || styleIdx >= MAX_STYLES || glyph.dataLength > UI_GLYPH_BITMAP_BYTES ||
+      (glyph.dataLength > 0 && bitmap == nullptr)) {
+    return false;
+  }
+
+  const UiGlyphKey key{codepoint, styleIdx};
+  const auto result = uiCache_->lru.put(key, UiGlyphSlot{});
+  if (result.evicted) {
+    dirtyStyles[result.evictedKey.style] = true;
+    uiCache_->kernDirty[result.evictedKey.style] = true;
+  }
+
+  const uint16_t slot = static_cast<uint16_t>(result.index);
+  uiCache_->lru.valueAt(slot).slot = slot;
+  uiCache_->glyphs[slot] = glyph;
+  uiCache_->glyphs[slot].dataOffset = 0;
+  if (glyph.dataLength > 0) {
+    memcpy(uiCache_->bitmaps[slot], bitmap, glyph.dataLength);
+  }
+  dirtyStyles[styleIdx] = true;
+  uiCache_->kernDirty[styleIdx] = true;
+  return true;
+}
+
+int SdCardFont::loadUiGlyphs(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount) {
+  if (!uiCache_ || styleIdx >= MAX_STYLES || !styles_[styleIdx].present || !codepoints || cpCount == 0) return 0;
+
+  struct PendingGlyph {
+    uint32_t codepoint = 0;
+    int32_t globalIndex = -1;
+    EpdGlyph glyph{};
+  };
+
+  std::unique_ptr<PendingGlyph[]> pending(new (std::nothrow) PendingGlyph[cpCount]);
+  std::unique_ptr<uint32_t[]> readOrder(new (std::nothrow) uint32_t[cpCount]);
+  if (!pending || !readOrder) {
+    LOG_ERR("SDCF", "Failed to allocate UI glyph staging for style %u", styleIdx);
+    return static_cast<int>(cpCount);
+  }
+
+  uint32_t validCount = 0;
+  int missing = 0;
+  for (uint32_t i = 0; i < cpCount; i++) {
+    const UiGlyphKey key{codepoints[i], styleIdx};
+    if (uiCache_->lru.find(key)) continue;
+
+    const int32_t globalIndex = findGlobalGlyphIndex(styles_[styleIdx], codepoints[i]);
+    if (globalIndex < 0) {
+      missing++;
+      continue;
+    }
+
+    pending[validCount].codepoint = codepoints[i];
+    pending[validCount].globalIndex = globalIndex;
+    readOrder[validCount] = validCount;
+    validCount++;
+  }
+
+  if (validCount == 0) return missing;
+
+  std::sort(readOrder.get(), readOrder.get() + validCount,
+            [&](uint32_t left, uint32_t right) {
+              return pending[left].globalIndex < pending[right].globalIndex;
+            });
+
+  HalFile file;
+  if (!Storage.openFileForRead("SDCF", filePath_, file)) {
+    LOG_ERR("SDCF", "Failed to open .cpfont for UI prewarm (style %u)", styleIdx);
+    return missing + static_cast<int>(validCount);
+  }
+
+  unsigned long sdStart = millis();
+  uint32_t seekCount = 0;
+  int32_t lastReadIndex = INT32_MIN;
+  for (uint32_t i = 0; i < validCount; i++) {
+    PendingGlyph& item = pending[readOrder[i]];
+    const uint32_t fileOffset = styles_[styleIdx].glyphsFileOffset +
+                                static_cast<uint32_t>(item.globalIndex) * sizeof(EpdGlyph);
+    if (item.globalIndex != lastReadIndex + 1) {
+      if (!file.seekSet(fileOffset)) {
+        LOG_ERR("SDCF", "UI prewarm: failed to seek to glyph %d (style %u)", item.globalIndex, styleIdx);
+        file.close();
+        return missing + static_cast<int>(validCount);
+      }
+      seekCount++;
+    }
+    if (file.read(reinterpret_cast<uint8_t*>(&item.glyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
+      LOG_ERR("SDCF", "UI prewarm: short glyph read (style %u, glyph %d)", styleIdx, item.globalIndex);
+      file.close();
+      return missing + static_cast<int>(validCount);
+    }
+    lastReadIndex = item.globalIndex;
+  }
+
+  std::sort(readOrder.get(), readOrder.get() + validCount,
+            [&](uint32_t left, uint32_t right) {
+              return pending[left].glyph.dataOffset < pending[right].glyph.dataOffset;
+            });
+
+  std::unique_ptr<uint8_t[]> bitmap(new (std::nothrow) uint8_t[UI_GLYPH_BITMAP_BYTES]);
+  if (!bitmap) {
+    LOG_ERR("SDCF", "Failed to allocate UI glyph staging bitmap (%u bytes)", UI_GLYPH_BITMAP_BYTES);
+    file.close();
+    return missing + static_cast<int>(validCount);
+  }
+
+  bool dirtyStyles[MAX_STYLES] = {};
+  uint32_t loadedCount = 0;
+  uint32_t bitmapBytes = 0;
+  uint32_t lastBitmapEnd = UINT32_MAX;
+  for (uint32_t i = 0; i < validCount; i++) {
+    PendingGlyph& item = pending[readOrder[i]];
+    const uint32_t dataLength = item.glyph.dataLength;
+    if (dataLength > UI_GLYPH_BITMAP_BYTES) {
+      LOG_DBG("SDCF", "UI glyph U+%04X style %u exceeds cache slot (%u bytes)", item.codepoint, styleIdx,
+              dataLength);
+      continue;
+    }
+
+    if (dataLength > 0) {
+      const uint32_t fileOffset = styles_[styleIdx].bitmapFileOffset + item.glyph.dataOffset;
+      if (fileOffset != lastBitmapEnd) {
+        if (!file.seekSet(fileOffset)) {
+          LOG_ERR("SDCF", "UI prewarm: failed to seek to bitmap (style %u)", styleIdx);
+          break;
+        }
+        seekCount++;
+      }
+      if (file.read(bitmap.get(), dataLength) != static_cast<int>(dataLength)) {
+        LOG_ERR("SDCF", "UI prewarm: short bitmap read (style %u)", styleIdx);
+        break;
+      }
+      lastBitmapEnd = fileOffset + dataLength;
+    }
+
+    if (cacheUiGlyph(styleIdx, item.codepoint, item.glyph, dataLength > 0 ? bitmap.get() : nullptr, dirtyStyles)) {
+      loadedCount++;
+      bitmapBytes += dataLength;
+    }
+  }
+  file.close();
+
+  for (uint8_t si = 0; si < MAX_STYLES; si++) {
+    if (dirtyStyles[si]) rebuildUiStyleData(si);
+  }
+
+  stats_.sdReadTimeMs += millis() - sdStart;
+  stats_.seekCount += seekCount;
+  stats_.uniqueGlyphs += loadedCount;
+  stats_.bitmapBytes += bitmapBytes;
+  return missing + static_cast<int>(validCount - loadedCount);
+}
+
+bool SdCardFont::getUiGlyphSlot(const EpdGlyph* glyph, uint16_t* outSlot) const {
+  if (!uiCache_ || !glyph) return false;
+
+  const uintptr_t address = reinterpret_cast<uintptr_t>(glyph);
+  const uintptr_t first = reinterpret_cast<uintptr_t>(&uiCache_->glyphs[0]);
+  const uintptr_t end = first + sizeof(EpdGlyph) * UI_CACHE_CAPACITY;
+  if (address < first || address >= end) return false;
+  const uintptr_t offset = address - first;
+  if (offset % sizeof(EpdGlyph) != 0) return false;
+
+  const uint16_t slot = static_cast<uint16_t>(offset / sizeof(EpdGlyph));
+  if (!uiCache_->lru.usedAt(slot) || uiCache_->lru.valueAt(slot).slot != slot) return false;
+  if (outSlot) *outSlot = slot;
+  return true;
+}
+
 int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly) {
   if (!loaded_) return -1;
   if (!utf8Text) return 0;
@@ -781,6 +1033,8 @@ int SdCardFont::prewarmUi(const char* utf8Text, uint8_t styleMask) {
     cacheOwner_ = CacheOwner::Ui;
   }
 
+  if (!ensureUiCache()) return -1;
+
   std::unique_ptr<uint32_t[]> codepoints(new (std::nothrow) uint32_t[MAX_UI_GLYPHS]);
   if (!codepoints) {
     LOG_ERR("SDCF", "Failed to allocate UI codepoint buffer (%u bytes)", MAX_UI_GLYPHS * 4);
@@ -788,8 +1042,6 @@ int SdCardFont::prewarmUi(const char* utf8Text, uint8_t styleMask) {
   }
   uint32_t cpCount = 0;
 
-  // Put the current string first. If the bounded cache fills, the visible UI
-  // gets priority over glyphs retained from an older screen.
   collectUniqueCodepoints(utf8Text, codepoints.get(), cpCount, MAX_UI_GLYPHS);
 
   bool hasReplacement = false;
@@ -801,50 +1053,18 @@ int SdCardFont::prewarmUi(const char* utf8Text, uint8_t styleMask) {
   }
   if (!hasReplacement && cpCount < MAX_UI_GLYPHS) codepoints[cpCount++] = REPLACEMENT_GLYPH;
 
-  // Retain already cached glyphs while there is room. The next rebuild keeps
-  // the union, so a repeated UI string does not touch the SD card again.
-  for (uint8_t si = 0; si < MAX_STYLES && cpCount < MAX_UI_GLYPHS; si++) {
-    if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    const auto& s = styles_[si];
-    for (uint32_t ii = 0; ii < s.miniData.intervalCount && cpCount < MAX_UI_GLYPHS; ii++) {
-      const auto& interval = s.miniData.intervals[ii];
-      for (uint32_t cp = interval.first;; cp++) {
-        bool found = false;
-        for (uint32_t i = 0; i < cpCount; i++) {
-          if (codepoints[i] == cp) {
-            found = true;
-            break;
-          }
-        }
-        if (!found) codepoints[cpCount++] = cp;
-        if (cp == interval.last || cpCount >= MAX_UI_GLYPHS) break;
-      }
-    }
-  }
-
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (styleMask & (1 << si)) appendLigatureOutputs(si, codepoints.get(), cpCount, MAX_UI_GLYPHS);
   }
   std::sort(codepoints.get(), codepoints.get() + cpCount);
 
-  bool needsRebuild = false;
-  for (uint8_t si = 0; si < MAX_STYLES && !needsRebuild; si++) {
-    if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    const auto& s = styles_[si];
-    for (uint32_t i = 0; i < cpCount; i++) {
-      if (findGlobalGlyphIndex(s, codepoints[i]) >= 0 && !s.epdFont.hasCodepoint(codepoints[i])) {
-        needsRebuild = true;
-        break;
-      }
-    }
-  }
-  if (!needsRebuild) return 0;
-
   unsigned long startMs = millis();
   int totalMissed = 0;
   for (uint8_t si = 0; si < MAX_STYLES; si++) {
     if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-    totalMissed += prewarmStyle(si, codepoints.get(), cpCount, false);
+    totalMissed += loadUiGlyphs(si, codepoints.get(), cpCount);
+    rebuildUiKern(si);
+    rebuildUiStyleData(si);
   }
   stats_.prewarmTotalMs = millis() - startMs;
   return totalMissed;
@@ -1077,6 +1297,8 @@ int SdCardFont::prewarmStyle(uint8_t styleIdx, const uint32_t* codepoints, uint3
 
 void SdCardFont::clearCache() {
   clearOverflow();
+  delete uiCache_;
+  uiCache_ = nullptr;
   // Note: advance table is intentionally preserved here. It persists across
   // layout passes so repeated section indexing amortizes SD reads. Use
   // clearPersistentCache() to wipe it.
@@ -1385,37 +1607,56 @@ uint8_t SdCardFont::resolveStyleMask(uint8_t styleMask) const {
   return resolvedMask;
 }
 
-// --- On-demand glyph loading (overflow buffer) ---
+// --- On-demand glyph loading ---
 
 const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   auto* oc = static_cast<OverflowContext*>(ctx);
   auto* self = oc->self;
-  uint8_t styleIdx = oc->styleIdx;
+  const uint8_t styleIdx = oc->styleIdx;
 
   if (!self->loaded_ || styleIdx >= MAX_STYLES || !self->styles_[styleIdx].present) return nullptr;
-  const auto& s = self->styles_[styleIdx];
+
+  if (self->cacheOwner_ == CacheOwner::Ui && self->ensureUiCache()) {
+    const UiGlyphKey key{codepoint, styleIdx};
+    if (auto* cached = self->uiCache_->lru.find(key)) {
+      return &self->uiCache_->glyphs[cached->slot];
+    }
+
+    self->loadUiGlyphs(styleIdx, &codepoint, 1);
+    if (auto* cached = self->uiCache_->lru.find(key)) {
+      return &self->uiCache_->glyphs[cached->slot];
+    }
+  }
+
+  return self->loadOverflowGlyph(styleIdx, codepoint);
+}
+
+const EpdGlyph* SdCardFont::loadOverflowGlyph(uint8_t styleIdx, uint32_t codepoint) {
+  if (!loaded_ || styleIdx >= MAX_STYLES || !styles_[styleIdx].present) return nullptr;
+  const auto& s = styles_[styleIdx];
+
   if (!s.fullIntervals && !s.bmpIntervals) return nullptr;
 
   // Check overflow cache first (matching both codepoint and style)
-  for (uint32_t i = 0; i < self->overflowCount_; i++) {
-    if (self->overflow_[i].codepoint == codepoint && self->overflow_[i].styleIdx == styleIdx) {
-      return &self->overflow_[i].glyph;
+  for (uint32_t i = 0; i < overflowCount_; i++) {
+    if (overflow_[i].codepoint == codepoint && overflow_[i].styleIdx == styleIdx) {
+      return &overflow_[i].glyph;
     }
   }
 
   // Look up global glyph index via full intervals
-  int32_t globalIdx = self->findGlobalGlyphIndex(s, codepoint);
+  int32_t globalIdx = findGlobalGlyphIndex(s, codepoint);
   if (globalIdx < 0) return nullptr;
 
   // Pick overflow slot (ring buffer). Read into temporaries first so the
   // existing slot stays valid if SD I/O fails. Bookkeeping (count/next)
   // is deferred until after all I/O succeeds to avoid inconsistent state.
-  uint32_t slot = self->overflowNext_;
-  bool wasAtCapacity = (self->overflowCount_ == OVERFLOW_CAPACITY);
+  uint32_t slot = overflowNext_;
+  bool wasAtCapacity = (overflowCount_ == OVERFLOW_CAPACITY);
 
   // Read glyph metadata into temporary
   HalFile file;
-  if (!Storage.openFileForRead("SDCF", self->filePath_, file)) {
+  if (!Storage.openFileForRead("SDCF", filePath_, file)) {
     LOG_ERR("SDCF", "Overflow: failed to open .cpfont");
     return nullptr;
   }
@@ -1429,6 +1670,7 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
   }
   if (file.read(reinterpret_cast<uint8_t*>(&tempGlyph), sizeof(EpdGlyph)) != sizeof(EpdGlyph)) {
     LOG_ERR("SDCF", "Overflow: failed to read glyph metadata for U+%04X style %u", codepoint, styleIdx);
+    file.close();
     return nullptr;
   }
 
@@ -1438,6 +1680,7 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
     tempBitmap = new (std::nothrow) uint8_t[tempGlyph.dataLength];
     if (!tempBitmap) {
       LOG_ERR("SDCF", "Overflow: failed to allocate %u bytes for U+%04X bitmap", tempGlyph.dataLength, codepoint);
+      file.close();
       return nullptr;
     }
     if (!file.seekSet(s.bitmapFileOffset + tempGlyph.dataOffset)) {
@@ -1449,29 +1692,31 @@ const EpdGlyph* SdCardFont::onGlyphMiss(void* ctx, uint32_t codepoint) {
     if (file.read(tempBitmap, tempGlyph.dataLength) != static_cast<int>(tempGlyph.dataLength)) {
       LOG_ERR("SDCF", "Overflow: failed to read bitmap for U+%04X", codepoint);
       delete[] tempBitmap;
+      file.close();
       return nullptr;
     }
   }
 
   // All reads succeeded — commit to slot and advance ring buffer
   if (wasAtCapacity) {
-    delete[] self->overflow_[slot].bitmap;
+    delete[] overflow_[slot].bitmap;
   } else {
-    self->overflowCount_++;
+    overflowCount_++;
   }
-  self->overflowNext_ = (slot + 1) % OVERFLOW_CAPACITY;
-  self->overflow_[slot].glyph = tempGlyph;
-  self->overflow_[slot].bitmap = tempBitmap;
-  self->overflow_[slot].codepoint = codepoint;
-  self->overflow_[slot].styleIdx = styleIdx;
+  overflowNext_ = (slot + 1) % OVERFLOW_CAPACITY;
+  overflow_[slot].glyph = tempGlyph;
+  overflow_[slot].bitmap = tempBitmap;
+  overflow_[slot].codepoint = codepoint;
+  overflow_[slot].styleIdx = styleIdx;
 
   LOG_DBG("SDCF", "Overflow: loaded U+%04X style %u on demand (slot %u/%u)", codepoint, styleIdx, slot,
           OVERFLOW_CAPACITY);
 
-  return &self->overflow_[slot].glyph;
+  return &overflow_[slot].glyph;
 }
 
 bool SdCardFont::isOverflowGlyph(const EpdGlyph* glyph) const {
+  if (getUiGlyphSlot(glyph, nullptr)) return true;
   for (uint32_t i = 0; i < overflowCount_; i++) {
     if (&overflow_[i].glyph == glyph) return true;
   }
@@ -1479,12 +1724,21 @@ bool SdCardFont::isOverflowGlyph(const EpdGlyph* glyph) const {
 }
 
 const uint8_t* SdCardFont::getOverflowBitmap(const EpdGlyph* glyph) const {
+  uint16_t uiSlot = 0;
+  if (getUiGlyphSlot(glyph, &uiSlot)) {
+    return uiCache_->glyphs[uiSlot].dataLength > 0 ? uiCache_->bitmaps[uiSlot] : nullptr;
+  }
   for (uint32_t i = 0; i < overflowCount_; i++) {
     if (&overflow_[i].glyph == glyph) {
       return overflow_[i].bitmap;
     }
   }
   return nullptr;
+}
+
+void SdCardFont::touchUiGlyph(const EpdGlyph* glyph) const {
+  uint16_t slot = 0;
+  if (getUiGlyphSlot(glyph, &slot)) uiCache_->lru.touchAt(slot);
 }
 
 SdCardFont* SdCardFont::fromMissCtx(void* ctx) { return static_cast<OverflowContext*>(ctx)->self; }

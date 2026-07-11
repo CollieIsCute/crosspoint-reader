@@ -39,18 +39,18 @@ const uint8_t* GfxRenderer::getGlyphBitmap(const EpdFontData* fontData, const Ep
     // must consume it (draw the glyph) before requesting another bitmap.
     return fd->getBitmap(fontData, glyph, glyphIndex);
   }
-  // For SD card fonts, check if the glyph was loaded on demand into the overflow
-  // buffer.  getOverflowBitmap() returns:
-  //   - bitmap pointer for overflow glyphs with bitmap data
-  //   - nullptr for overflow glyphs without bitmap data (e.g. space: width=0, height=0)
-  //   - nullptr for non-overflow glyphs (normal prewarmed path)
-  // We distinguish overflow-with-no-bitmap from non-overflow by checking isOverflowGlyph().
+  // For SD card fonts, check if the glyph was loaded into the UI LRU or the
+  // small on-demand overflow buffer. getOverflowBitmap() returns nullptr for
+  // zero-width glyphs; isOverflowGlyph() distinguishes those from normal
+  // prewarmed glyphs whose bitmap lives in fontData->bitmap.
   if (fontData->glyphMissCtx) {
     auto* sdFont = SdCardFont::fromMissCtx(fontData->glyphMissCtx);
+    sdFont->touchUiGlyph(glyph);
     if (sdFont->isOverflowGlyph(glyph)) {
       return sdFont->getOverflowBitmap(glyph);  // may be nullptr for zero-width glyphs
     }
   }
+  if (!fontData->bitmap) return nullptr;
   return &fontData->bitmap[glyph->dataOffset];
 }
 
