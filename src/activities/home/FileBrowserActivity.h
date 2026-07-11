@@ -12,7 +12,7 @@
 #include "util/ButtonNavigator.h"
 
 #if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
-#include <UiProfileLog.h>
+#include "util/UiProfileLog.h"
 #endif
 
 class FileBrowserActivity final : public Activity {
