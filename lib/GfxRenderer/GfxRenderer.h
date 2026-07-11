@@ -14,6 +14,7 @@ enum class BidiBaseDir : signed char { AUTO = -1, LTR = 0, RTL = 1 };
 class FontCacheManager;
 class SdCardFont;
 
+#include <cstdint>
 #include <cstring>
 #include <map>
 #include <string>
@@ -88,6 +89,30 @@ class GfxRenderer {
   // call stays single-font (consistent bit depth, metrics, wrapping).
   int resolveTextFontId(int fontId, const char* text, EpdFontFamily::Style style) const;
 
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  static constexpr uint16_t UI_PROFILE_UNIQUE_CAPACITY = 512;
+  struct UiProfileStats {
+    uint32_t textCalls = 0;
+    uint32_t codepoints = 0;
+    uint32_t cjkCodepoints = 0;
+    uint32_t latinCodepoints = 0;
+    uint32_t otherCodepoints = 0;
+    uint32_t uniqueCjk = 0;
+    uint32_t uniqueLatin = 0;
+    uint32_t uniqueOther = 0;
+    uint32_t truncationCalls = 0;
+    uint32_t truncationIterations = 0;
+    uint32_t heapFreeBefore = 0;
+    uint32_t maxAllocBefore = 0;
+    uint16_t uniqueCount = 0;
+    bool uniqueCapacityHit = false;
+    uint32_t uniqueCodepoints[UI_PROFILE_UNIQUE_CAPACITY] = {};
+  };
+
+  mutable UiProfileStats uiProfile_;
+  void recordUiProfileText(const char* text) const;
+#endif
+
   void renderChar(const EpdFontFamily& fontFamily, uint32_t cp, int* x, int* y, bool pixelState,
                   EpdFontFamily::Style style) const;
   void freeBwBufferChunks();
@@ -140,6 +165,9 @@ class GfxRenderer {
   // setFallbackFont maps a primary UI font id to an SD font id of the same size.
   void setFallbackFont(int primaryFontId, int fallbackFontId) { fallbackFontMap_[primaryFontId] = fallbackFontId; }
   void clearFallbackFonts() { fallbackFontMap_.clear(); }
+  // Debug-only per-frame UI profiling. These are no-ops in non-debug builds.
+  void beginUiProfile() const;
+  void logUiProfile(const char* label, uint32_t queueUs, uint32_t renderUs, uint32_t displayUs) const;
   // Ensure SD card font glyph data is loaded for the given text. Called from layout code
   // (which holds a const GfxRenderer&) before measuring word widths. Safe to call on non-SD fonts (no-op).
   // styleMask: bitmask of styles to prepare (bit 0=regular, 1=bold, 2=italic, 3=bold-italic).

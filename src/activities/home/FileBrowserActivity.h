@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -21,6 +23,9 @@ class FileBrowserActivity final : public Activity {
   ButtonNavigator buttonNavigator;
 
   size_t selectorIndex = 0;
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  std::atomic<uint32_t> lastNavigationUs{0};
+#endif
 
   bool lockLongPressBack = false;
   // True when this activity was entered while Confirm was already held; we must swallow the next

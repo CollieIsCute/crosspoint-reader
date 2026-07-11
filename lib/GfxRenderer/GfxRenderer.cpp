@@ -1,5 +1,6 @@
 #include "GfxRenderer.h"
 
+#include <Arduino.h>
 #include <BidiUtils.h>
 #include <FontDecompressor.h>
 #include <HalGPIO.h>
@@ -20,6 +21,10 @@ namespace {
 uint8_t resolveSdCardStyle(const SdCardFont& font, const EpdFontFamily::Style style) {
   return font.resolveStyle(static_cast<uint8_t>(style));
 }
+
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+bool isAsciiLatin(const uint32_t cp) { return (cp >= 'A' && cp <= 'Z') || (cp >= 'a' && cp <= 'z'); }
+#endif
 }  // namespace
 
 namespace {
@@ -93,6 +98,101 @@ void GfxRenderer::begin() {
 
 bool GfxRenderer::isFontCacheScanning() const { return fontCacheManager_ && fontCacheManager_->isScanning(); }
 
+void GfxRenderer::beginUiProfile() const {
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  uiProfile_ = {};
+  uiProfile_.heapFreeBefore = ESP.getFreeHeap();
+  uiProfile_.maxAllocBefore = ESP.getMaxAllocHeap();
+  if (fontCacheManager_) {
+    fontCacheManager_->resetStats();
+  } else {
+    for (const auto& [id, font] : sdCardFonts_) font->resetStats();
+  }
+#endif
+}
+
+void GfxRenderer::logUiProfile(const char* label, const uint32_t queueUs, const uint32_t renderUs,
+                               const uint32_t displayUs) const {
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  const uint32_t heapFreeAfter = ESP.getFreeHeap();
+  const uint32_t maxAllocAfter = ESP.getMaxAllocHeap();
+  const uint32_t minFree = ESP.getMinFreeHeap();
+  LOG_DBG("FBPROF",
+          "[%s] queue=%luus render=%luus display=%luus total=%luus text_calls=%lu cp=%lu unique=%u unique_cap=%u "
+          "cjk=%lu/%lu latin=%lu/%lu other=%lu/%lu trunc=%lu/%lu heap=%lu->%lu max=%lu->%lu min=%lu",
+          label, static_cast<unsigned long>(queueUs), static_cast<unsigned long>(renderUs),
+          static_cast<unsigned long>(displayUs), static_cast<unsigned long>(queueUs + renderUs + displayUs),
+          static_cast<unsigned long>(uiProfile_.textCalls), static_cast<unsigned long>(uiProfile_.codepoints),
+          static_cast<unsigned>(uiProfile_.uniqueCount), uiProfile_.uniqueCapacityHit ? 1U : 0U,
+          static_cast<unsigned long>(uiProfile_.cjkCodepoints), static_cast<unsigned long>(uiProfile_.uniqueCjk),
+          static_cast<unsigned long>(uiProfile_.latinCodepoints), static_cast<unsigned long>(uiProfile_.uniqueLatin),
+          static_cast<unsigned long>(uiProfile_.otherCodepoints), static_cast<unsigned long>(uiProfile_.uniqueOther),
+          static_cast<unsigned long>(uiProfile_.truncationCalls),
+          static_cast<unsigned long>(uiProfile_.truncationIterations),
+          static_cast<unsigned long>(uiProfile_.heapFreeBefore), static_cast<unsigned long>(heapFreeAfter),
+          static_cast<unsigned long>(uiProfile_.maxAllocBefore), static_cast<unsigned long>(maxAllocAfter),
+          static_cast<unsigned long>(minFree));
+  if (fontCacheManager_) {
+    fontCacheManager_->logStats(label);
+    fontCacheManager_->resetStats();
+  } else {
+    for (const auto& [id, font] : sdCardFonts_) {
+      font->logStats(label);
+      font->resetStats();
+    }
+  }
+#else
+  (void)label;
+  (void)queueUs;
+  (void)renderUs;
+  (void)displayUs;
+#endif
+}
+
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+void GfxRenderer::recordUiProfileText(const char* text) const {
+  if (!text) return;
+
+  uiProfile_.textCalls++;
+  const auto* cursor = reinterpret_cast<const unsigned char*>(text);
+  uint32_t cp = 0;
+  while ((cp = utf8NextCodepoint(&cursor)) != 0) {
+    const bool isCjk = utf8IsCjkBreakable(cp);
+    const bool isLatin = isAsciiLatin(cp);
+    uiProfile_.codepoints++;
+    if (isCjk) {
+      uiProfile_.cjkCodepoints++;
+    } else if (isLatin) {
+      uiProfile_.latinCodepoints++;
+    } else {
+      uiProfile_.otherCodepoints++;
+    }
+
+    bool seen = false;
+    for (uint16_t i = 0; i < uiProfile_.uniqueCount; i++) {
+      if (uiProfile_.uniqueCodepoints[i] == cp) {
+        seen = true;
+        break;
+      }
+    }
+    if (seen) continue;
+
+    if (uiProfile_.uniqueCount >= UI_PROFILE_UNIQUE_CAPACITY) {
+      uiProfile_.uniqueCapacityHit = true;
+      continue;
+    }
+    uiProfile_.uniqueCodepoints[uiProfile_.uniqueCount++] = cp;
+    if (isCjk) {
+      uiProfile_.uniqueCjk++;
+    } else if (isLatin) {
+      uiProfile_.uniqueLatin++;
+    } else {
+      uiProfile_.uniqueOther++;
+    }
+  }
+}
+#endif
+
 void GfxRenderer::clearUiFontCache() const {
   if (fontCacheManager_) {
     fontCacheManager_->clearUiCache();
@@ -125,6 +225,9 @@ void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
 }
 
 int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const EpdFontFamily::Style style) const {
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  recordUiProfileText(text);
+#endif
   if (fallbackFontMap_.empty() || text == nullptr || *text == '\0') {
     return fontId;
   }
@@ -1436,6 +1539,10 @@ std::string GfxRenderer::truncatedText(const int fontId, const char* text, const
                                        const EpdFontFamily::Style style) const {
   if (!text || maxWidth <= 0) return "";
 
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  uiProfile_.truncationCalls++;
+#endif
+
   std::string item = text;
   // U+2026 HORIZONTAL ELLIPSIS (UTF-8: 0xE2 0x80 0xA6)
   const char* ellipsis = "\xe2\x80\xa6";
@@ -1446,6 +1553,9 @@ std::string GfxRenderer::truncatedText(const int fontId, const char* text, const
   }
 
   while (!item.empty() && getTextWidth(fontId, (item + ellipsis).c_str(), style) >= maxWidth) {
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+    uiProfile_.truncationIterations++;
+#endif
     utf8RemoveLastChar(item);
   }
 

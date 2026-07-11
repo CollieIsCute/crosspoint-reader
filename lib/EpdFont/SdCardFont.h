@@ -116,6 +116,17 @@ class SdCardFont {
     uint32_t seekCount = 0;
     uint32_t uniqueGlyphs = 0;
     uint32_t bitmapBytes = 0;
+    uint32_t uiPrewarmCalls = 0;
+    uint32_t uiPrewarmTimeUs = 0;
+    uint32_t uiRequestedGlyphs = 0;
+    uint32_t uiCacheHits = 0;
+    uint32_t uiCacheMisses = 0;
+    uint32_t uiLoadedGlyphs = 0;
+    uint32_t uiEvictions = 0;
+    uint32_t uiGlyphMissCallbacks = 0;
+    uint32_t uiOverflowLoads = 0;
+    uint32_t uiStyleRebuilds = 0;
+    uint32_t uiSdReadTimeUs = 0;
   };
   void logStats(const char* label = "SDCF");
   void resetStats();

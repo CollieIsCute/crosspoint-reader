@@ -73,6 +73,9 @@ void FileBrowserActivity::onEnter() {
   }
 
   selectorIndex = 0;
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  lastNavigationUs.store(0, std::memory_order_relaxed);
+#endif
 
   // If Confirm was held while this activity opened (typical when launched from a menu), ignore
   // its release — otherwise we'd immediately auto-open whatever is at index 0.
@@ -305,21 +308,33 @@ void FileBrowserActivity::loop() {
   int listSize = static_cast<int>(files.size());
   buttonNavigator.onNextRelease([this, listSize] {
     selectorIndex = ButtonNavigator::nextIndex(static_cast<int>(selectorIndex), listSize);
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+    lastNavigationUs.store(micros(), std::memory_order_relaxed);
+#endif
     requestUpdate();
   });
 
   buttonNavigator.onPreviousRelease([this, listSize] {
     selectorIndex = ButtonNavigator::previousIndex(static_cast<int>(selectorIndex), listSize);
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+    lastNavigationUs.store(micros(), std::memory_order_relaxed);
+#endif
     requestUpdate();
   });
 
   buttonNavigator.onNextContinuous([this, listSize, pageItems] {
     selectorIndex = ButtonNavigator::nextPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+    lastNavigationUs.store(micros(), std::memory_order_relaxed);
+#endif
     requestUpdate();
   });
 
   buttonNavigator.onPreviousContinuous([this, listSize, pageItems] {
     selectorIndex = ButtonNavigator::previousPageIndex(static_cast<int>(selectorIndex), listSize, pageItems);
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+    lastNavigationUs.store(micros(), std::memory_order_relaxed);
+#endif
     requestUpdate();
   });
 }
@@ -345,6 +360,12 @@ std::string getFileExtension(std::string filename) {
 }
 
 void FileBrowserActivity::render(RenderLock&&) {
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  const uint32_t renderStartUs = micros();
+  const uint32_t navigationUs = lastNavigationUs.load(std::memory_order_relaxed);
+  const uint32_t queueUs = navigationUs == 0 ? 0 : renderStartUs - navigationUs;
+  renderer.beginUiProfile();
+#endif
   renderer.clearScreen();
 
   const auto pageWidth = renderer.getScreenWidth();
@@ -410,7 +431,15 @@ void FileBrowserActivity::render(RenderLock&&) {
                                             files.empty() ? "" : tr(STR_DIR_DOWN));
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  const uint32_t displayStartUs = micros();
+#endif
   renderer.displayBuffer();
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  const uint32_t displayUs = micros() - displayStartUs;
+  renderer.logUiProfile("FileBrowser", queueUs, displayStartUs - renderStartUs, displayUs);
+  lastNavigationUs.store(0, std::memory_order_relaxed);
+#endif
 }
 
 size_t FileBrowserActivity::findEntry(const std::string& name) const {
