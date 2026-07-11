@@ -99,10 +99,19 @@ void FileBrowserActivity::onEnter() {
     loadFiles();
   }
 
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  if (!uiProfileLog.begin()) {
+    LOG_ERR("FileBrowser", "Failed to open UI profile log: %s", UiProfileLog::PATH);
+  }
+#endif
+
   requestUpdate();
 }
 
 void FileBrowserActivity::onExit() {
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+  uiProfileLog.end();
+#endif
   Activity::onExit();
   files.clear();
   fileNameBuffer.reset();

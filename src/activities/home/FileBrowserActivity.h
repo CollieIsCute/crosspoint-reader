@@ -11,6 +11,10 @@
 #include "activities/Activity.h"
 #include "util/ButtonNavigator.h"
 
+#if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
+#include <UiProfileLog.h>
+#endif
+
 class FileBrowserActivity final : public Activity {
  public:
   // Books = standard reader browser; PickFirmware = filter to .bin only and return path via ActivityResult.
@@ -25,6 +29,7 @@ class FileBrowserActivity final : public Activity {
   size_t selectorIndex = 0;
 #if defined(ENABLE_SERIAL_LOG) && defined(LOG_LEVEL) && (LOG_LEVEL >= 2)
   std::atomic<uint32_t> lastNavigationUs{0};
+  UiProfileLog uiProfileLog;
 #endif
 
   bool lockLongPressBack = false;

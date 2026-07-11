@@ -31,6 +31,10 @@ static HWCDC& logSerial = Serial;
 
 void logPrintf(const char* level, const char* origin, const char* format, ...);
 
+// Optional sink for structured debug capture. The sink must not call LOG_* again.
+using LogSink = void (*)(const char* line, void* context);
+void setLogSink(LogSink sink, void* context);
+
 #ifdef ENABLE_SERIAL_LOG
 #if LOG_LEVEL >= 0
 #define LOG_ERR(origin, format, ...) logPrintf("ERR", origin, format "\n", ##__VA_ARGS__)
