@@ -21,6 +21,7 @@
 class SdCardFont {
  public:
   static constexpr uint16_t MAX_PAGE_GLYPHS = 512;
+  static constexpr uint16_t MAX_UI_GLYPHS = 128;
   static constexpr uint8_t MAX_STYLES = 4;
 
   SdCardFont() = default;
@@ -44,6 +45,10 @@ class SdCardFont {
   // Returns number of glyphs that couldn't be loaded (0 on full success).
   int prewarm(const char* utf8Text, uint8_t styleMask = 0x0F, bool metadataOnly = false);
 
+  // Batch-load UI glyphs and keep the bounded bitmap cache until the next
+  // reader/UI transition or SD-font invalidation.
+  int prewarmUi(const char* utf8Text, uint8_t styleMask = 0x0F);
+
   // Build a compact advance-only table for layout measurement.
   // Extracts ALL unique codepoints from words (no MAX_PAGE_GLYPHS cap),
   // batch-reads advanceX from SD, stores in a sorted per-style table.
@@ -62,6 +67,12 @@ class SdCardFont {
   // Preserves the persistent advance cache so repeated layout passes can reuse
   // previously fetched metrics.
   void clearCache();
+
+  // Clear the active UI bitmap cache while retaining font metadata and advances.
+  void clearUiCache();
+
+  // Clear reader bitmap and persistent advance caches.
+  void clearReaderCache();
 
   // Drop the persistent advance cache. Call when unloading the SD font or
   // when font/size/family/glyph-table state changes.
@@ -191,8 +202,11 @@ class SdCardFont {
     bool present = false;
   };
 
+  enum class CacheOwner : uint8_t { None, ReaderPage, Ui };
+
   PerStyle styles_[MAX_STYLES] = {};
   uint8_t styleCount_ = 0;
+  CacheOwner cacheOwner_ = CacheOwner::None;
 
   char filePath_[128] = {};
 
@@ -244,6 +258,7 @@ class SdCardFont {
   void freeStyleMiniKern(PerStyle& s);
   bool loadStyleKernLigatureData(PerStyle& s);
   bool buildMiniKernMatrix(PerStyle& s, const uint32_t* codepoints, uint32_t cpCount);
+  void appendLigatureOutputs(uint8_t styleIdx, uint32_t* codepoints, uint32_t& cpCount, uint32_t maxCount);
   void applyKernLigaturePointers(PerStyle& s, EpdFontData& data) const;
   void applyGlyphMissCallback(uint8_t styleIdx);
   int32_t findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) const;

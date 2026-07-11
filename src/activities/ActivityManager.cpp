@@ -1,6 +1,5 @@
 #include "ActivityManager.h"
 
-#include <FontCacheManager.h>
 #include <HalPowerManager.h>
 
 #include <algorithm>
@@ -37,12 +36,25 @@ void ActivityManager::renderTaskTrampoline(void* param) {
   self->renderTaskLoop();
 }
 
+void ActivityManager::syncFontCacheMode() {
+  const bool inReader = isReaderActivity();
+  if (inReader == fontCacheReaderMode_) return;
+
+  if (inReader) {
+    renderer.clearUiFontCache();
+  } else {
+    renderer.clearReaderFontCache();
+  }
+  fontCacheReaderMode_ = inReader;
+}
+
 void ActivityManager::renderTaskLoop() {
   while (true) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     // Acquire the lock before reading currentActivity to avoid a TOCTOU race
     // where the main task deletes the activity between the null-check and render().
     RenderLock lock;
+    syncFontCacheMode();
     if (currentActivity) {
       HalPowerManager::Lock powerLock;  // Ensure we don't go into low-power mode while rendering
       currentActivity->render(std::move(lock));
@@ -91,6 +103,7 @@ void ActivityManager::loop() {
       } else {
         currentActivity = std::move(stackActivities.back());
         stackActivities.pop_back();
+        syncFontCacheMode();
         LOG_DBG("ACT", "Popped from activity stack, new size = %zu", stackActivities.size());
         // Handle result if necessary
         if (currentActivity->resultHandler) {
@@ -131,6 +144,7 @@ void ActivityManager::loop() {
       }
       pendingAction = PendingAction::None;
       currentActivity = std::move(pendingActivity);
+      syncFontCacheMode();
 
       lock.unlock();  // onEnter may acquire its own lock
       currentActivity->onEnter();
@@ -167,6 +181,7 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
   } else {
     // No current activity, safe to launch immediately
     currentActivity = std::move(newActivity);
+    syncFontCacheMode();
     currentActivity->onEnter();
   }
 }

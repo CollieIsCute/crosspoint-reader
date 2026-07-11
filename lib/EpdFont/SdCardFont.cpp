@@ -131,6 +131,7 @@ void SdCardFont::freeAll() {
     freeStyleAll(styles_[i]);
   }
   styleCount_ = 0;
+  cacheOwner_ = CacheOwner::None;
   contentHash_ = 0;
   loaded_ = false;
 }
@@ -657,10 +658,46 @@ int32_t SdCardFont::findGlobalGlyphIndex(const PerStyle& s, uint32_t codepoint) 
 
 // --- Prewarm ---
 
+void SdCardFont::appendLigatureOutputs(uint8_t styleIdx, uint32_t* codepoints, uint32_t& cpCount, uint32_t maxCount) {
+  if (styleIdx >= MAX_STYLES || !styles_[styleIdx].present || cpCount == 0 || cpCount >= maxCount) return;
+
+  auto& s = styles_[styleIdx];
+  loadStyleKernLigatureData(s);
+  if (!s.ligaturePairs) return;
+
+  for (uint8_t li = 0; li < s.header.ligaturePairCount && cpCount < maxCount; li++) {
+    const uint32_t leftCp = s.ligaturePairs[li].pair >> 16;
+    const uint32_t rightCp = s.ligaturePairs[li].pair & 0xFFFF;
+    const uint32_t outCp = s.ligaturePairs[li].ligatureCp;
+
+    bool hasLeft = false;
+    bool hasRight = false;
+    for (uint32_t i = 0; i < cpCount; i++) {
+      if (codepoints[i] == leftCp) hasLeft = true;
+      if (codepoints[i] == rightCp) hasRight = true;
+      if (hasLeft && hasRight) break;
+    }
+    if (!hasLeft || !hasRight) continue;
+
+    bool hasOut = false;
+    for (uint32_t i = 0; i < cpCount; i++) {
+      if (codepoints[i] == outCp) {
+        hasOut = true;
+        break;
+      }
+    }
+    if (!hasOut) codepoints[cpCount++] = outCp;
+  }
+}
+
 int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOnly) {
   if (!loaded_) return -1;
+  if (!utf8Text) return 0;
   styleMask = resolveStyleMask(styleMask);
   if (styleMask == 0) return 0;
+
+  if (cacheOwner_ == CacheOwner::Ui) clearCache();
+  cacheOwner_ = CacheOwner::ReaderPage;
 
   unsigned long startMs = millis();
 
@@ -715,35 +752,7 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
   if (!metadataOnly) {
     for (uint8_t si = 0; si < MAX_STYLES; si++) {
       if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
-      auto& s = styles_[si];
-
-      loadStyleKernLigatureData(s);
-      if (s.ligaturePairs && s.header.ligaturePairCount > 0) {
-        for (uint8_t li = 0; li < s.header.ligaturePairCount && cpCount < MAX_PAGE_GLYPHS; li++) {
-          uint32_t leftCp = s.ligaturePairs[li].pair >> 16;
-          uint32_t rightCp = s.ligaturePairs[li].pair & 0xFFFF;
-          uint32_t outCp = s.ligaturePairs[li].ligatureCp;
-
-          bool hasLeft = false, hasRight = false;
-          for (uint32_t i = 0; i < cpCount; i++) {
-            if (codepoints[i] == leftCp) hasLeft = true;
-            if (codepoints[i] == rightCp) hasRight = true;
-            if (hasLeft && hasRight) break;
-          }
-          if (!hasLeft || !hasRight) continue;
-
-          bool hasOut = false;
-          for (uint32_t i = 0; i < cpCount; i++) {
-            if (codepoints[i] == outCp) {
-              hasOut = true;
-              break;
-            }
-          }
-          if (!hasOut) {
-            codepoints[cpCount++] = outCp;
-          }
-        }
-      }
+      appendLigatureOutputs(si, codepoints.get(), cpCount, MAX_PAGE_GLYPHS);
     }
   }
 
@@ -757,6 +766,86 @@ int SdCardFont::prewarm(const char* utf8Text, uint8_t styleMask, bool metadataOn
     totalMissed += prewarmStyle(si, codepoints.get(), cpCount, metadataOnly);
   }
 
+  stats_.prewarmTotalMs = millis() - startMs;
+  return totalMissed;
+}
+
+int SdCardFont::prewarmUi(const char* utf8Text, uint8_t styleMask) {
+  if (!loaded_) return -1;
+  if (!utf8Text) return 0;
+  styleMask = resolveStyleMask(styleMask);
+  if (styleMask == 0) return 0;
+
+  if (cacheOwner_ != CacheOwner::Ui) {
+    clearCache();
+    cacheOwner_ = CacheOwner::Ui;
+  }
+
+  std::unique_ptr<uint32_t[]> codepoints(new (std::nothrow) uint32_t[MAX_UI_GLYPHS]);
+  if (!codepoints) {
+    LOG_ERR("SDCF", "Failed to allocate UI codepoint buffer (%u bytes)", MAX_UI_GLYPHS * 4);
+    return -1;
+  }
+  uint32_t cpCount = 0;
+
+  // Put the current string first. If the bounded cache fills, the visible UI
+  // gets priority over glyphs retained from an older screen.
+  collectUniqueCodepoints(utf8Text, codepoints.get(), cpCount, MAX_UI_GLYPHS);
+
+  bool hasReplacement = false;
+  for (uint32_t i = 0; i < cpCount; i++) {
+    if (codepoints[i] == REPLACEMENT_GLYPH) {
+      hasReplacement = true;
+      break;
+    }
+  }
+  if (!hasReplacement && cpCount < MAX_UI_GLYPHS) codepoints[cpCount++] = REPLACEMENT_GLYPH;
+
+  // Retain already cached glyphs while there is room. The next rebuild keeps
+  // the union, so a repeated UI string does not touch the SD card again.
+  for (uint8_t si = 0; si < MAX_STYLES && cpCount < MAX_UI_GLYPHS; si++) {
+    if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
+    const auto& s = styles_[si];
+    for (uint32_t ii = 0; ii < s.miniData.intervalCount && cpCount < MAX_UI_GLYPHS; ii++) {
+      const auto& interval = s.miniData.intervals[ii];
+      for (uint32_t cp = interval.first;; cp++) {
+        bool found = false;
+        for (uint32_t i = 0; i < cpCount; i++) {
+          if (codepoints[i] == cp) {
+            found = true;
+            break;
+          }
+        }
+        if (!found) codepoints[cpCount++] = cp;
+        if (cp == interval.last || cpCount >= MAX_UI_GLYPHS) break;
+      }
+    }
+  }
+
+  for (uint8_t si = 0; si < MAX_STYLES; si++) {
+    if (styleMask & (1 << si)) appendLigatureOutputs(si, codepoints.get(), cpCount, MAX_UI_GLYPHS);
+  }
+  std::sort(codepoints.get(), codepoints.get() + cpCount);
+
+  bool needsRebuild = false;
+  for (uint8_t si = 0; si < MAX_STYLES && !needsRebuild; si++) {
+    if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
+    const auto& s = styles_[si];
+    for (uint32_t i = 0; i < cpCount; i++) {
+      if (findGlobalGlyphIndex(s, codepoints[i]) >= 0 && !s.epdFont.hasCodepoint(codepoints[i])) {
+        needsRebuild = true;
+        break;
+      }
+    }
+  }
+  if (!needsRebuild) return 0;
+
+  unsigned long startMs = millis();
+  int totalMissed = 0;
+  for (uint8_t si = 0; si < MAX_STYLES; si++) {
+    if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
+    totalMissed += prewarmStyle(si, codepoints.get(), cpCount, false);
+  }
   stats_.prewarmTotalMs = millis() - startMs;
   return totalMissed;
 }
@@ -996,6 +1085,14 @@ void SdCardFont::clearCache() {
     freeStyleMiniData(styles_[i]);
     applyGlyphMissCallback(i);
   }
+  cacheOwner_ = CacheOwner::None;
+}
+
+void SdCardFont::clearUiCache() { clearCache(); }
+
+void SdCardFont::clearReaderCache() {
+  clearCache();
+  clearPersistentCache();
 }
 
 // --- Advance table ---

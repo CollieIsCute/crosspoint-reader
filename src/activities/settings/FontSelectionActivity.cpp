@@ -171,7 +171,7 @@ void FontSelectionActivity::renderPreviewPane(int top, int height, int fontId, c
   if (auto* fcm = renderer.getFontCacheManager()) {
     char prewarmBuf[256];
     snprintf(prewarmBuf, sizeof(prewarmBuf), "%s %s", previewText, ELLIPSIS_UTF8);
-    fcm->prewarmCache(fontId, prewarmBuf, 0x01);
+    fcm->prewarmUi(fontId, prewarmBuf, EpdFontFamily::REGULAR);
   }
 
   const auto lines = renderer.wrappedText(fontId, previewText, width, maxLines);

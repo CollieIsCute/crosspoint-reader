@@ -16,7 +16,10 @@ class FontCacheManager {
   void setFontDecompressor(FontDecompressor* d);
 
   void clearCache();
+  void clearUiCache();
+  void clearReaderCache();
   void prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask = 0x0F);
+  void prewarmUi(int fontId, const char* utf8Text, EpdFontFamily::Style style);
   void logStats(const char* label = "render");
   void resetStats();
 

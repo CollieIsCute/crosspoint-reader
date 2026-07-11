@@ -53,6 +53,8 @@ class ActivityManager {
   TaskHandle_t renderTaskHandle = nullptr;
   static void renderTaskTrampoline(void* param);
   [[noreturn]] virtual void renderTaskLoop();
+  void syncFontCacheMode();
+  bool fontCacheReaderMode_ = false;
 
   // Set by requestUpdateAndWait(); read and cleared by the render task after render completes.
   // Note: only one waiting task is supported at a time

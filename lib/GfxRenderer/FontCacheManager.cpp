@@ -19,6 +19,32 @@ void FontCacheManager::clearCache() {
   }
 }
 
+void FontCacheManager::clearUiCache() {
+  if (fontDecompressor_) fontDecompressor_->clearCache();
+  for (auto& [id, font] : sdCardFonts_) {
+    font->clearUiCache();
+  }
+}
+
+void FontCacheManager::clearReaderCache() {
+  if (fontDecompressor_) fontDecompressor_->clearCache();
+  for (auto& [id, font] : sdCardFonts_) {
+    font->clearReaderCache();
+  }
+}
+
+void FontCacheManager::prewarmUi(int fontId, const char* utf8Text, EpdFontFamily::Style style) {
+  auto it = sdCardFonts_.find(fontId);
+  if (it == sdCardFonts_.end()) return;
+
+  const uint8_t styleMask = static_cast<uint8_t>(1u << (static_cast<uint8_t>(style) & 0x03));
+  const int missed = it->second->prewarmUi(utf8Text, styleMask);
+  if (missed > 0) {
+    LOG_DBG("FCM", "prewarmUi: %d glyph(s) not found (fontId=%d, style=%u)", missed, fontId,
+            static_cast<uint8_t>(style) & 0x03);
+  }
+}
+
 void FontCacheManager::prewarmCache(int fontId, const char* utf8Text, uint8_t styleMask) {
   // SD card font prewarm path: prewarm all requested styles in one call
   auto it = sdCardFonts_.find(fontId);

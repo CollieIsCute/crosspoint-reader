@@ -93,6 +93,26 @@ void GfxRenderer::begin() {
 
 bool GfxRenderer::isFontCacheScanning() const { return fontCacheManager_ && fontCacheManager_->isScanning(); }
 
+void GfxRenderer::clearUiFontCache() const {
+  if (fontCacheManager_) {
+    fontCacheManager_->clearUiCache();
+    return;
+  }
+  for (const auto& [id, font] : sdCardFonts_) {
+    font->clearUiCache();
+  }
+}
+
+void GfxRenderer::clearReaderFontCache() const {
+  if (fontCacheManager_) {
+    fontCacheManager_->clearReaderCache();
+    return;
+  }
+  for (const auto& [id, font] : sdCardFonts_) {
+    font->clearReaderCache();
+  }
+}
+
 void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   auto result = fontMap.insert({fontId, font});
   if (!result.second) {
@@ -120,6 +140,12 @@ int GfxRenderer::resolveTextFontId(const int fontId, const char* text, const Epd
     // Only redirect for CJK the primary font cannot draw. Latin/symbol strings
     // the built-in UI fonts already cover are left untouched.
     if (utf8IsCjkBreakable(cp) && !primary.hasCodepoint(cp, style)) {
+      if (fontCacheManager_) {
+        fontCacheManager_->prewarmUi(fallbackFontId, text, style);
+      } else {
+        const auto sdIt = sdCardFonts_.find(fallbackFontId);
+        if (sdIt != sdCardFonts_.end()) sdIt->second->prewarmUi(text, 1u << (static_cast<uint8_t>(style) & 0x03));
+      }
       return fallbackFontId;
     }
   }
