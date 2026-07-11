@@ -113,6 +113,10 @@ void GfxRenderer::clearReaderFontCache() const {
   }
 }
 
+void GfxRenderer::prewarmUiText(const int fontId, const char* text, const EpdFontFamily::Style style) const {
+  resolveTextFontId(fontId, text, style);
+}
+
 void GfxRenderer::insertFont(const int fontId, EpdFontFamily font) {
   auto result = fontMap.insert({fontId, font});
   if (!result.second) {

@@ -255,6 +255,38 @@ int BaseTheme::getListPageItems(int contentHeight, bool hasSubtitle) const {
   return contentHeight / rowHeight;
 }
 
+void BaseTheme::prewarmListUi(const GfxRenderer& renderer, const int firstIndex, const int endIndex,
+                              const std::function<std::string(int index)>& rowTitle,
+                              const std::function<std::string(int index)>& rowSubtitle,
+                              const std::function<std::string(int index)>& rowValue, const int titleFontId,
+                              const EpdFontFamily::Style titleStyle, const int subtitleFontId,
+                              const EpdFontFamily::Style subtitleStyle, const int valueFontId,
+                              const EpdFontFamily::Style valueStyle) const {
+  std::string titleBatch;
+  std::string subtitleBatch;
+  std::string valueBatch;
+  const int rowCount = std::max(0, endIndex - firstIndex);
+  titleBatch.reserve(static_cast<size_t>(rowCount) * 16);
+  subtitleBatch.reserve(static_cast<size_t>(rowCount) * 16);
+  valueBatch.reserve(static_cast<size_t>(rowCount) * 8);
+
+  const auto append = [](std::string& batch, const std::string& text) {
+    if (text.empty()) return;
+    if (!batch.empty()) batch.push_back('\n');
+    batch += text;
+  };
+
+  for (int i = firstIndex; i < endIndex; i++) {
+    append(titleBatch, rowTitle(i));
+    if (rowSubtitle) append(subtitleBatch, rowSubtitle(i));
+    if (rowValue) append(valueBatch, rowValue(i));
+  }
+
+  if (!titleBatch.empty()) renderer.prewarmUiText(titleFontId, titleBatch.c_str(), titleStyle);
+  if (!subtitleBatch.empty()) renderer.prewarmUiText(subtitleFontId, subtitleBatch.c_str(), subtitleStyle);
+  if (!valueBatch.empty()) renderer.prewarmUiText(valueFontId, valueBatch.c_str(), valueStyle);
+}
+
 void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, int selectedIndex,
                          const std::function<std::string(int index)>& rowTitle,
                          const std::function<std::string(int index)>& rowSubtitle,
@@ -300,6 +332,9 @@ void BaseTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   // Draw all items
   const auto pageStartIndex = selectedIndex / pageItems * pageItems;
+  prewarmListUi(renderer, pageStartIndex, std::min(itemCount, pageStartIndex + pageItems), rowTitle, rowSubtitle,
+                rowValue, UI_10_FONT_ID, EpdFontFamily::REGULAR, SMALL_FONT_ID, EpdFontFamily::REGULAR, UI_10_FONT_ID,
+                EpdFontFamily::REGULAR);
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int itemY = rect.y + (i % pageItems) * rowHeight;
 

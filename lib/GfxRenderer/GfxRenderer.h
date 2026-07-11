@@ -126,6 +126,9 @@ class GfxRenderer {
   FontCacheManager* getFontCacheManager() const { return fontCacheManager_; }
   void clearUiFontCache() const;
   void clearReaderFontCache() const;
+  // Trigger one batch prewarm for a UI string. The normal resolver keeps
+  // Latin-only strings on the built-in font and redirects CJK strings to SD.
+  void prewarmUiText(int fontId, const char* text, EpdFontFamily::Style style = EpdFontFamily::REGULAR) const;
   bool isFontCacheScanning() const;
   const std::map<int, EpdFontFamily>& getFontMap() const { return fontMap; }
   void registerSdCardFont(int fontId, SdCardFont* font) { sdCardFonts_[fontId] = font; }

@@ -327,6 +327,9 @@ void RoundedRaffTheme::drawList(const GfxRenderer& renderer, Rect rect, int item
   const int rowX = rect.x + sidePadding;
   const int rowWidth = rect.width - sidePadding * 2;
 
+  prewarmListUi(renderer, pageStartIndex, std::min(itemCount, pageStartIndex + pageItems), rowTitle, rowSubtitle,
+                rowValue, kTitleFontId, EpdFontFamily::BOLD, kSubtitleFontId, EpdFontFamily::REGULAR, kTitleFontId,
+                EpdFontFamily::REGULAR);
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int rowY = rect.y + (i % pageItems) * rowStep;
     const bool isSelected = i == selectedIndex;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <EpdFontFamily.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -219,6 +221,14 @@ class BaseTheme {
                         const std::function<UIIcon(int index)>& rowIcon = nullptr,
                         const std::function<std::string(int index)>& rowValue = nullptr, bool highlightValue = false,
                         const std::function<bool(int index)>& rowDimmed = nullptr) const;
+  // Prewarm the visible list rows as one UI batch so each new row does not
+  // rebuild and reread the entire existing mini cache.
+  void prewarmListUi(const GfxRenderer& renderer, int firstIndex, int endIndex,
+                     const std::function<std::string(int index)>& rowTitle,
+                     const std::function<std::string(int index)>& rowSubtitle,
+                     const std::function<std::string(int index)>& rowValue, int titleFontId,
+                     EpdFontFamily::Style titleStyle, int subtitleFontId, EpdFontFamily::Style subtitleStyle,
+                     int valueFontId, EpdFontFamily::Style valueStyle) const;
   virtual void drawHeader(const GfxRenderer& renderer, Rect rect, const char* title,
                           const char* subtitle = nullptr) const;
   virtual void drawSubHeader(const GfxRenderer& renderer, Rect rect, const char* label,

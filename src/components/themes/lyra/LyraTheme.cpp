@@ -255,6 +255,9 @@ void LyraTheme::drawList(const GfxRenderer& renderer, Rect rect, int itemCount, 
 
   // Draw all items
   const auto pageStartIndex = selectedIndex / pageItems * pageItems;
+  prewarmListUi(renderer, pageStartIndex, std::min(itemCount, pageStartIndex + pageItems), rowTitle, rowSubtitle,
+                rowValue, UI_10_FONT_ID, EpdFontFamily::REGULAR, SMALL_FONT_ID, EpdFontFamily::REGULAR, UI_10_FONT_ID,
+                EpdFontFamily::REGULAR);
   int iconY = (rowSubtitle != nullptr) ? 16 : 10;
   for (int i = pageStartIndex; i < itemCount && i < pageStartIndex + pageItems; i++) {
     const int itemY = rect.y + (i % pageItems) * rowHeight;
