@@ -49,8 +49,8 @@ class FixedLruCache {
   FixedLruCache& operator=(const FixedLruCache&) = delete;
 
   void clear() {
-    for (auto& bucket : buckets_) bucket = EMPTY_BUCKET;
-    for (auto& entry : entries_) entry = Entry{};
+    std::fill(buckets_, buckets_ + BUCKET_COUNT, EMPTY_BUCKET);
+    std::fill(entries_, entries_ + Capacity, Entry{});
     size_ = 0;
     head_ = INVALID_INDEX;
     tail_ = INVALID_INDEX;
