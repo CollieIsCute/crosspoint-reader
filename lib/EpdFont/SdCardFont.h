@@ -220,9 +220,7 @@ class SdCardFont {
     uint32_t codepoint = 0;
     uint8_t style = 0;
 
-    bool operator==(const UiGlyphKey& other) const {
-      return codepoint == other.codepoint && style == other.style;
-    }
+    bool operator==(const UiGlyphKey& other) const { return codepoint == other.codepoint && style == other.style; }
   };
 
   struct UiGlyphKeyHash {
@@ -320,7 +318,7 @@ class SdCardFont {
   void rebuildUiStyleData(uint8_t styleIdx);
   int loadUiGlyphs(uint8_t styleIdx, const uint32_t* codepoints, uint32_t cpCount);
   bool cacheUiGlyph(uint8_t styleIdx, uint32_t codepoint, const EpdGlyph& glyph, const uint8_t* bitmap,
-                   bool dirtyStyles[MAX_STYLES]);
+                    bool dirtyStyles[MAX_STYLES]);
   bool getUiGlyphSlot(const EpdGlyph* glyph, uint16_t* outSlot) const;
   const EpdGlyph* loadOverflowGlyph(uint8_t styleIdx, uint32_t codepoint);
 

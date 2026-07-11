@@ -753,9 +753,7 @@ void SdCardFont::rebuildUiStyleData(uint8_t styleIdx) {
   }
 
   std::sort(intervals, intervals + count,
-            [](const EpdUnicodeInterval& left, const EpdUnicodeInterval& right) {
-              return left.first < right.first;
-            });
+            [](const EpdUnicodeInterval& left, const EpdUnicodeInterval& right) { return left.first < right.first; });
 
   memset(&data, 0, sizeof(data));
   data.glyph = uiCache_->glyphs;
@@ -834,9 +832,7 @@ int SdCardFont::loadUiGlyphs(uint8_t styleIdx, const uint32_t* codepoints, uint3
   if (validCount == 0) return missing;
 
   std::sort(readOrder.get(), readOrder.get() + validCount,
-            [&](uint32_t left, uint32_t right) {
-              return pending[left].globalIndex < pending[right].globalIndex;
-            });
+            [&](uint32_t left, uint32_t right) { return pending[left].globalIndex < pending[right].globalIndex; });
 
   HalFile file;
   if (!Storage.openFileForRead("SDCF", filePath_, file)) {
@@ -849,8 +845,8 @@ int SdCardFont::loadUiGlyphs(uint8_t styleIdx, const uint32_t* codepoints, uint3
   int32_t lastReadIndex = INT32_MIN;
   for (uint32_t i = 0; i < validCount; i++) {
     PendingGlyph& item = pending[readOrder[i]];
-    const uint32_t fileOffset = styles_[styleIdx].glyphsFileOffset +
-                                static_cast<uint32_t>(item.globalIndex) * sizeof(EpdGlyph);
+    const uint32_t fileOffset =
+        styles_[styleIdx].glyphsFileOffset + static_cast<uint32_t>(item.globalIndex) * sizeof(EpdGlyph);
     if (item.globalIndex != lastReadIndex + 1) {
       if (!file.seekSet(fileOffset)) {
         LOG_ERR("SDCF", "UI prewarm: failed to seek to glyph %d (style %u)", item.globalIndex, styleIdx);
@@ -867,10 +863,9 @@ int SdCardFont::loadUiGlyphs(uint8_t styleIdx, const uint32_t* codepoints, uint3
     lastReadIndex = item.globalIndex;
   }
 
-  std::sort(readOrder.get(), readOrder.get() + validCount,
-            [&](uint32_t left, uint32_t right) {
-              return pending[left].glyph.dataOffset < pending[right].glyph.dataOffset;
-            });
+  std::sort(readOrder.get(), readOrder.get() + validCount, [&](uint32_t left, uint32_t right) {
+    return pending[left].glyph.dataOffset < pending[right].glyph.dataOffset;
+  });
 
   std::unique_ptr<uint8_t[]> bitmap(new (std::nothrow) uint8_t[UI_GLYPH_BITMAP_BYTES]);
   if (!bitmap) {
@@ -887,8 +882,7 @@ int SdCardFont::loadUiGlyphs(uint8_t styleIdx, const uint32_t* codepoints, uint3
     PendingGlyph& item = pending[readOrder[i]];
     const uint32_t dataLength = item.glyph.dataLength;
     if (dataLength > UI_GLYPH_BITMAP_BYTES) {
-      LOG_DBG("SDCF", "UI glyph U+%04X style %u exceeds cache slot (%u bytes)", item.codepoint, styleIdx,
-              dataLength);
+      LOG_DBG("SDCF", "UI glyph U+%04X style %u exceeds cache slot (%u bytes)", item.codepoint, styleIdx, dataLength);
       continue;
     }
 

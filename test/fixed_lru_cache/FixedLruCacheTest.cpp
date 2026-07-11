@@ -11,15 +11,11 @@ struct GlyphKey {
   uint32_t codepoint = 0;
   uint8_t style = 0;
 
-  bool operator==(const GlyphKey& other) const {
-    return codepoint == other.codepoint && style == other.style;
-  }
+  bool operator==(const GlyphKey& other) const { return codepoint == other.codepoint && style == other.style; }
 };
 
 struct GlyphKeyHash {
-  size_t operator()(const GlyphKey& key) const {
-    return static_cast<size_t>(key.codepoint * 2654435761u ^ key.style);
-  }
+  size_t operator()(const GlyphKey& key) const { return static_cast<size_t>(key.codepoint * 2654435761u ^ key.style); }
 };
 
 struct ConstantHash {
