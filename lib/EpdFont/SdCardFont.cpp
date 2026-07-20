@@ -2,6 +2,7 @@
 
 #include <HalStorage.h>
 #include <Logging.h>
+#include <Memory.h>
 #include <Utf8.h>
 
 #include <algorithm>
@@ -776,12 +777,33 @@ int SdCardFont::prewarmUi(const char* utf8Text, uint8_t styleMask) {
   styleMask = resolveStyleMask(styleMask);
   if (styleMask == 0) return 0;
 
+  // Cache mutation is not internally synchronized; callers must serialize UI
+  // measurement and rendering with RenderLock.
+  if (cacheOwner_ == CacheOwner::Ui) {
+    bool allCached = true;
+    for (uint8_t si = 0; si < MAX_STYLES && allCached; si++) {
+      if (!(styleMask & (1 << si)) || !styles_[si].present) continue;
+      const auto& s = styles_[si];
+
+      const char* cursor = utf8Text;
+      uint32_t cp;
+      while ((cp = utf8NextCodepoint(reinterpret_cast<const uint8_t**>(&cursor)))) {
+        cp = s.epdFont.applyLigatures(cp, cursor);
+        if (!s.epdFont.hasCodepoint(cp)) {
+          allCached = false;
+          break;
+        }
+      }
+    }
+    if (allCached) return 0;
+  }
+
   if (cacheOwner_ != CacheOwner::Ui) {
     clearCache();
     cacheOwner_ = CacheOwner::Ui;
   }
 
-  std::unique_ptr<uint32_t[]> codepoints(new (std::nothrow) uint32_t[MAX_UI_GLYPHS]);
+  auto codepoints = makeUniqueNoThrow<uint32_t[]>(MAX_UI_GLYPHS);
   if (!codepoints) {
     LOG_ERR("SDCF", "Failed to allocate UI codepoint buffer (%u bytes)", MAX_UI_GLYPHS * 4);
     return -1;
@@ -1088,6 +1110,8 @@ void SdCardFont::clearCache() {
   cacheOwner_ = CacheOwner::None;
 }
 
+// Activity transitions deliberately clear all active bitmap caches,
+// regardless of cacheOwner_.
 void SdCardFont::clearUiCache() { clearCache(); }
 
 void SdCardFont::clearReaderCache() {

@@ -11,6 +11,7 @@ ConfirmationActivity::ConfirmationActivity(GfxRenderer& renderer, MappedInputMan
 
 void ConfirmationActivity::onEnter() {
   Activity::onEnter();
+  RenderLock lock(*this);
 
   lineHeight = renderer.getLineHeight(fontId);
   const int maxWidth = renderer.getScreenWidth() - (margin * 2);

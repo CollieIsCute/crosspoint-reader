@@ -172,7 +172,7 @@ void ActivityManager::exitActivity(const RenderLock& lock) {
 }
 
 void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
-  // Note: no lock here, this is usually called by loop() and we may run into deadlock
+  // Deferred replacements are locked in loop(); only the immediate path locks here.
   if (currentActivity) {
     // Defer launch if we're currently in an activity, to avoid deleting the current activity
     // leading to the "delete this" problem
@@ -180,8 +180,10 @@ void ActivityManager::replaceActivity(std::unique_ptr<Activity>&& newActivity) {
     pendingAction = PendingAction::Replace;
   } else {
     // No current activity, safe to launch immediately
+    RenderLock lock;
     currentActivity = std::move(newActivity);
     syncFontCacheMode();
+    lock.unlock();
     currentActivity->onEnter();
   }
 }
